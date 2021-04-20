@@ -1,0 +1,297 @@
+--- Getting Started
+--- ===============
+
+--- Testing Your Code
+--- -----------------
+
+module Tests where
+
+import Main hiding (main)
+import Scheme.Core
+import Scheme.Parse
+import Scheme.Eval
+import Data.HashMap.Strict (empty, fromList)
+import Data.List (isInfixOf)
+import Control.Monad
+import Control.Monad.State
+import Control.Monad.Except
+
+allTests :: [([Bool], String)]
+allTests = let prefix str (ts, desc) = (ts, str ++ desc)
+            in map (prefix "Lifters: ") tests_lifting ++
+               map (prefix "Runtime: ") tests_runtime ++
+               map (prefix "Evaluator: ") evaluatorTests ++
+               [ (tests_paramStrs, "paramStrs")
+               ]
+
+testBank :: [(String, [([String], [Val], String)])]
+testBank = [ basicIntsSyms
+           , primitiveInts
+           , primitiveBools
+           , primitiveMisc
+           , consListCarCdr
+           , defDefineLambdaApply
+           , allowsDefOverPrimForm
+           , condForm
+           , letForm
+           , everythingElse
+           ]
+
+withRuntime :: String -> String
+withRuntime code =
+  case parse exprP "Expression" code of                   -- Parse
+    Left err -> show err                                  -- Diagnostics
+    Right expr ->
+      case runExcept $ runStateT (eval expr) runtime of   -- Eval
+        Left err -> show err                              -- Diagnostics
+        Right (val, _) -> show val
+
+
+--- ([Input], [ParsedAs], Output)
+type TestCase  = ([String], [Val], String)
+type TestSuite = (String, [TestCase])
+
+boolTests :: (TestCase -> Bool) -> TestSuite -> ([Bool], String)
+boolTests run (desc, tcs) = (map run tcs, desc)
+
+
+--- Problems (Part 1)
+--- =================
+
+--- Datatypes
+--- ---------
+
+--- ### Values
+
+tests_valShow :: [Bool]
+tests_valShow = [ show (Number 3) == "3"
+                , show (Symbol "noetuh") == "noetuh"
+                , show (PrimFunc return) == "#<primitive>"
+                , show (Func [] (Number 3) empty) == "#<function:(λ () ...)>"
+                , show (Pair (Number 3) (Number 5)) == "(3 . 5)"
+                , show (Pair (Number 3) (Symbol "nil")) == "(3)"
+                , show (Pair (Pair (Number 3) (Symbol "hoenu")) (Pair (Number 3) (Symbol "nil"))) == "((3 . hoenu) 3 )"
+                , show (Macro [] (Number 3)) == "#<macro () ...>"
+                ]
+
+--- Problems (Part 2)
+--- =================
+
+--- Environment
+--- -----------
+
+tests_lifting :: [([Bool], String)]
+tests_lifting = [ (tests_liftIntBinOp,     "liftIntBinOp")
+                , (tests_liftBoolOp,    "liftBoolOp")
+                , (tests_liftCompOp,    "liftCompOp")
+                , (tests_liftLowerList, "Lift and Lower List")
+                ]
+
+tests_runtime :: [([Bool], String)]
+tests_runtime = [ (tests_arithRuntime,  "Arithmetic Operators")
+                , (tests_boolRuntime,   "Boolean Operators")
+                , (tests_compRuntime,   "Comparison Operators")
+                , (tests_unaryRuntime,  "Unary Operators")
+                , (tests_otherRuntime,  "Other Operators")
+                ]
+
+--- ### Arithmetic Operators
+
+tests_liftIntBinOp :: [Bool]
+tests_liftIntBinOp = [ (show $ liftIntBinOp (+) 0 []) == "0"
+                  , (show $ apply $ liftIntBinOp (+) 0 [Number 5, Number 7, Number 9]) == "21"
+                  , (show $ apply $ liftIntBinOp (-) 0 []) == "0"
+                  , (show $ apply $ liftIntBinOp (-) 0 [Number 10, Number 5, Number 3, Number 3]) == "-1"
+                  , (show $ apply $ liftIntBinOp mod 10 []) == "10"
+                  , (show $ apply $ liftIntBinOp mod 10 [Number 100, Number 77, Number 5]) == "3"
+                  ]
+
+tests_arithRuntime :: [Bool]
+tests_arithRuntime = [ withRuntime "(+)" == "0"
+                     , withRuntime "(-)" == "0"
+                     , withRuntime "(*)" == "1"
+                     , withRuntime "(+ 3 4 5)" == "12"
+                     , withRuntime "(- 3 4 5)" == "-6"
+                     , withRuntime "(* 7 8 9)" == "504"
+                     ]
+
+--- ### Boolean Operators
+
+tests_liftBoolOp :: [Bool]
+tests_liftBoolOp = [ (show $ liftBoolVargOp and []) == "t"
+                   , (show $ liftBoolVargOp and [Symbol "t"]) == "t"
+                   , (show $ liftBoolVargOp and [Symbol "t", Number 10]) == "t"
+                   , (show $ liftBoolVargOp and [Symbol "t", Number 10, Symbol "nil"]) == "nil"
+                   , (show $ liftBoolVargOp and [Symbol "t", Number 10, Symbol "nil", Symbol "t"]) == "nil"
+                   ]
+
+tests_boolRuntime :: [Bool]
+tests_boolRuntime = [ withRuntime "(and #t #t #t #t)" == "#t"
+                    , withRuntime "(and #t #t #t #t)" == "#t"
+                    , withRuntime "(and #t #t 'nil)" == "#t"
+                    , withRuntime "(and 't 't #f #t)" == "#f"
+                    , withRuntime "(and 3 5 2 't)" == "#t"
+                    , withRuntime "(or #t #t #t #t)" == "#t"
+                    , withRuntime "(or #t #t #t #f)" == "#t"
+                    , withRuntime "(and)" == "#t"
+                    , withRuntime "(or)" == "#f"
+                    , withRuntime "(or 'nil 3 5 #t)" == "#t"
+                    ]
+
+--- ### Comparison Operators
+
+tests_liftCompOp :: [Bool]
+tests_liftCompOp = [ (show $ liftCompOp (<) []) == "t"
+                   , (show $ liftCompOp (<) [Number 1]) == "t"
+                   , (show $ liftCompOp (<) [Number 1, Number 2]) == "t"
+                   , (show $ liftCompOp (<) [Number 1, Number 2, Number 3]) == "t"
+                   , (show $ liftCompOp (<) [Number 1, Number 2, Number 3, Number 0]) == "nil"
+                   , (show $ liftCompOp (<) [Number 1, Number 2, Number 0, Number 3]) == "nil"
+                   , (show $ liftCompOp (\_ _ -> False) []) == "t"
+                   , (show $ liftCompOp (\_ _ -> False) [Number 1]) == "t"
+                   , (show $ liftCompOp (\_ _ -> False) [Number 1, Number 2]) == "nil"
+                   ]
+
+tests_compRuntime :: [Bool]
+tests_compRuntime = [ withRuntime "(<)" == "t"
+                    , withRuntime "(>)" == "t"
+                    , withRuntime "(<=)" == "t"
+                    , withRuntime "(>=)" == "t"
+                    , withRuntime "(=)" == "t"
+                    , withRuntime "(!=)" == "t"
+                    , withRuntime "(< 3 4 5)" == "t"
+                    , withRuntime "(< 3 3 5)" == "nil"
+                    , withRuntime "(> 3 4 5)" == "nil"
+                    , withRuntime "(> 3 2 1)" == "t"
+                    , withRuntime "(= 3 3 3)" == "t"
+                    , withRuntime "(= 3 3 1)" == "nil"
+                    , withRuntime "(!= 3 3 3)" == "nil"
+                    , withRuntime "(!= 3 3 1)" == "nil"
+                    , withRuntime "(!= 3 2 1)" == "t"
+                    ]
+
+--- ### Unary Operators
+
+tests_unaryRuntime :: [Bool]
+tests_unaryRuntime = [ withRuntime "(not)" == "*** Scheme-Exception: `not` is a unary operator. ***"
+                     , withRuntime "(car)" == "*** Scheme-Exception: `car` is a unary operator. ***"
+                     , withRuntime "(cdr)" == "*** Scheme-Exception: `cdr` is a unary operator. ***"
+                     , withRuntime "(cdr 7 2)" == "*** Scheme-Exception: `cdr` is a unary operator. ***"
+                     , withRuntime "(car 7 2)" == "*** Scheme-Exception: `car` is a unary operator. ***"
+                     , withRuntime "(not 7 2)" == "*** Scheme-Exception: `not` is a unary operator. ***"
+                     , withRuntime "(not #t)" == "nil"
+                     , withRuntime "(not t)" == "nil"
+                     , withRuntime "(not 'nil)" == "t"
+                     , withRuntime "(not nil)" == "nil"
+                     , withRuntime "(not nil #t)" == "*** Scheme-Exception: `not` is a unary operator. ***"
+                     , withRuntime "(not nil #t 3)" == "*** Scheme-Exception: `not` is a unary operator. ***"
+                     , withRuntime "(not nil 3)" == "*** Scheme-Exception: `not` is a unary operator. ***"
+                     , withRuntime "(not 3)" == "nil"
+                     , withRuntime "(car '(3 5) )" == "3"
+                     , withRuntime "(car 3 )" == "*** Scheme-Exception: Not a cons cell: 3 ***"
+                     , withRuntime "(cdr '(3 7) )" == "(7 )"
+                     ]
+
+--- ### Other Operators
+
+tests_liftLowerList :: [Bool]
+tests_liftLowerList = [ (show $ liftList []) == "nil"
+                      , (show $ liftList [Number 1]) == "(1 )"
+                      , (show $ liftList [Number 1, Symbol "nil"]) == "(1 nil )"
+                      , (show $ liftList [Number 1, Symbol "nil", Pair (Number 3) (Symbol "nil")]) == "(1 nil (3 ) )"
+                      , (show $ lowerList (Symbol "nil")) == "[]"
+                      , (show $ lowerList (Pair (Number 1) (Symbol "nil"))) == "[1]"
+                      , (show $ lowerList (Pair (Number 3) (Pair (Symbol "nil") (Symbol "nil")))) == "[3,nil]"
+                      , (show $ lowerList (Pair (Number 3) (Pair (Symbol "nil") (Pair (Pair (Number 3) (Symbol "nil")) (Symbol "nil"))))) == "[3,nil,(3 )]"
+                      ]
+
+tests_otherRuntime :: [Bool]
+tests_otherRuntime = [ withRuntime "(eq? 3 #t)" == "nil"
+                     , withRuntime "(eq? 3 3 3)" == "t"
+                     , withRuntime "(eq? 'x 'x 'x)" == "t"
+                     , withRuntime "(eq?)" == "t"
+                     , withRuntime "(eq? 6)" == "t"
+                     , withRuntime "(list 3 5 2 5)" == "(3 5 2 5 )"
+                     , withRuntime "(list)" == "nil"
+                     , withRuntime "(list 'eq? 5 #t 'nil)" == "(eq? 5 t nil )"
+                     ]
+
+--- Evaluation
+--- ----------
+
+evaluatorTests :: [([Bool], String)]
+evaluatorTests = map (boolTests testEval) testBank
+
+testEval :: TestCase -> Bool
+testEval (_, exps, val) = let result = show (genVals exps runtime)
+                                 in  (result == val || bothHaveExn val result)
+    where
+        bothHaveExn v r =    "Exception" `isInfixOf` v
+                          && "Exception" `isInfixOf` r
+
+genVals :: [Val] -> Env -> [Val]
+genVals []     env  = []
+genVals (e:es) env  = let evald = eval e env
+                      in  evald : (genVals es $ nextEnv env evald)
+
+--- ### Check parameter names
+
+-- tests_paramStrs :: [Bool]
+-- tests_paramStrs = [ paramStrs [] == Right []
+--                   , paramStrs [Symbol "x", Symbol "oentuh", Symbol "yoeu"] == Right ["x","oentuh","yoeu"]
+--                   , paramStrs [Symbol "x", Symbol "oentuh", Number 6, Symbol "yoeu"] == Left "Must use only `Symbol` for parameter names."
+--                   , paramStrs [Symbol "x", Symbol "oentuh", List [], Symbol "yoeu"] == Left "Must use only `Symbol` for parameter names."
+--                   , paramStrs [List [Symbol "x", Symbol "y"]] == Left "Must use only `Symbol` for parameter names."
+--                   ]
+
+--- ### Quoting, Quasi-Quoting, and Unquoting
+
+--- ### Evaluation - the function!
+
+--- #### Integer, Symbol, and Empty Forms
+
+--- #### Variable Definition Form
+
+--- #### Function Definition and Lambda Function Forms
+
+--- #### Conditional Form
+
+--- #### Let Form
+
+--- #### Cons Form
+
+--- #### Quoting, Quasi-Quoting, and Unquoting Forms
+
+--- #### Eval Form
+
+--- #### Macro Form
+
+--- #### Application Form
+
+--- REPL
+--- ----
+
+--- ### Main function
+
+basicIntsSyms :: TestSuite
+basicIntsSyms = ("Basic Integers/Symbols", [(["435"],[Number 435],"[435]"),(["a"],[Symbol "a"],"[*** Scheme-Exception: Symbol a has no value. ***]"),(["a","555"],[Symbol "a",Number 555],"[*** Scheme-Exception: Symbol a has no value. ***,555]"),(["555","a"],[Number 555,Symbol "a"],"[555,*** Scheme-Exception: Symbol a has no value. ***]")])
+primitiveInts :: TestSuite
+primitiveInts = ("Primitive Integer Operators", [(["+","-","*"],[Symbol "+",Symbol "-",Symbol "*"],"[*primitive*,*primitive*,*primitive*]"),([">","<",">=","<=","=","!="],[Symbol ">",Symbol "<",Symbol ">=",Symbol "<=",Symbol "=",Symbol "!="],"[*primitive*,*primitive*,*primitive*,*primitive*,*primitive*,*primitive*]"),(["(+ 3 4 2 10)","(* 3 3 3 2)"],[List [Symbol "+",Number 3,Number 4,Number 2,Number 10],List [Symbol "*",Number 3,Number 3,Number 3,Number 2]],"[19,54]"),(["(+ 2 (* 3 4))","(- 20 1)","(- 10 5 2)","(- 10 (+ 4 5 (* 3 5)) (- 14 2) 22)"],[List [Symbol "+",Number 2,List [Symbol "*",Number 3,Number 4]],List [Symbol "-",Number 20,Number 1],List [Symbol "-",Number 10,Number 5,Number 2],List [Symbol "-",Number 10,List [Symbol "+",Number 4,Number 5,List [Symbol "*",Number 3,Number 5]],List [Symbol "-",Number 14,Number 2],Number 22]],"[14,19,3,-48]"),(["(> 5 3)","(> 6  4 2)","(> 6 4 2 6)"],[List [Symbol ">",Number 5,Number 3],List [Symbol ">",Number 6,Number 4,Number 2],List [Symbol ">",Number 6,Number 4,Number 2,Number 6]],"[t,t,nil]"),(["(>= 5 5 3)","(>= 5 6 3)","(<= 2 3 4)","(<= 2 2 3)","(<= 2 1 2)"],[List [Symbol ">=",Number 5,Number 5,Number 3],List [Symbol ">=",Number 5,Number 6,Number 3],List [Symbol "<=",Number 2,Number 3,Number 4],List [Symbol "<=",Number 2,Number 2,Number 3],List [Symbol "<=",Number 2,Number 1,Number 2]],"[t,nil,t,t,nil]"),(["(= 5 5 5 5)","(= 5 3 5 2)","(= 5 (+ 2 3) (- 8 3))","(= 4 2)","(= 4 (- 4 1) (+ 3 1))","(!= 1 2 1)","(!= 1 1 2)","(!= 22 22 22)","(!= (+ 1 22) 23 22)","(!= (+ 1 22) 24 26)"],[List [Symbol "=",Number 5,Number 5,Number 5,Number 5],List [Symbol "=",Number 5,Number 3,Number 5,Number 2],List [Symbol "=",Number 5,List [Symbol "+",Number 2,Number 3],List [Symbol "-",Number 8,Number 3]],List [Symbol "=",Number 4,Number 2],List [Symbol "=",Number 4,List [Symbol "-",Number 4,Number 1],List [Symbol "+",Number 3,Number 1]],List [Symbol "!=",Number 1,Number 2,Number 1],List [Symbol "!=",Number 1,Number 1,Number 2],List [Symbol "!=",Number 22,Number 22,Number 22],List [Symbol "!=",List [Symbol "+",Number 1,Number 22],Number 23,Number 22],List [Symbol "!=",List [Symbol "+",Number 1,Number 22],Number 24,Number 26]],"[t,nil,t,nil,nil,t,nil,nil,nil,t]")])
+primitiveBools :: TestSuite
+primitiveBools = ("Primitive Boolean Operators", [(["and","or","not"],[Symbol "and",Symbol "or",Symbol "not"],"[*primitive*,*primitive*,*primitive*]"),(["(and #t #t)","(and #t 'nil)","(and #t #t #t #t)","(and #t 'nil 6 4)","(and #t 5)","(and (> 4 2) (> 5 2))","(and (> 4 2) (> 2 5))"],[List [Symbol "and",List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "t"]],List [Symbol "and",List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "nil"]],List [Symbol "and",List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "t"]],List [Symbol "and",List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "nil"],Number 6,Number 4],List [Symbol "and",List [Symbol "quote",Symbol "t"],Number 5],List [Symbol "and",List [Symbol ">",Number 4,Number 2],List [Symbol ">",Number 5,Number 2]],List [Symbol "and",List [Symbol ">",Number 4,Number 2],List [Symbol ">",Number 2,Number 5]]],"[t,nil,t,nil,t,t,nil]"),(["(or #t #t)","(or #t 'nil)","(or 'nil 'nil)","(or 5 2 6)","(or (and #t #t) 'nil)","(or (and 'nil #t) 6)"],[List [Symbol "or",List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "t"]],List [Symbol "or",List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "nil"]],List [Symbol "or",List [Symbol "quote",Symbol "nil"],List [Symbol "quote",Symbol "nil"]],List [Symbol "or",Number 5,Number 2,Number 6],List [Symbol "or",List [Symbol "and",List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "t"]],List [Symbol "quote",Symbol "nil"]],List [Symbol "or",List [Symbol "and",List [Symbol "quote",Symbol "nil"],List [Symbol "quote",Symbol "t"]],Number 6]],"[t,t,nil,t,t,t]"),(["(not (> 5 3))","(not (< 5 3))","(not #t #t)","(not 'nil #t #t #t)"],[List [Symbol "not",List [Symbol ">",Number 5,Number 3]],List [Symbol "not",List [Symbol "<",Number 5,Number 3]],List [Symbol "not",List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "t"]],List [Symbol "not",List [Symbol "quote",Symbol "nil"],List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "t"],List [Symbol "quote",Symbol "t"]]],"[nil,t,*** Scheme-Exception: `not` is a unary operator. ***,*** Scheme-Exception: `not` is a unary operator. ***]")])
+primitiveMisc :: TestSuite
+primitiveMisc = ("Primitive Misc.", [(["()"],[List []],"[nil]"),(["eq?"],[Symbol "eq?"],"[*primitive*]"),(["(+)","(-)","(*)","(>)","(<)","(>=)","(<=)","(=)","(!=)","(eq?)","(and)","(or)","(not)","(list)","(car)","(cdr)"],[List [Symbol "+"],List [Symbol "-"],List [Symbol "*"],List [Symbol ">"],List [Symbol "<"],List [Symbol ">="],List [Symbol "<="],List [Symbol "="],List [Symbol "!="],List [Symbol "eq?"],List [Symbol "and"],List [Symbol "or"],List [Symbol "not"],List [Symbol "list"],List [Symbol "car"],List [Symbol "cdr"]],"[0,0,1,t,t,t,t,t,t,t,t,nil,*** Scheme-Exception: `not` is a unary operator. ***,nil,*** Scheme-Exception: `car` is a unary operator. ***,*** Scheme-Exception: `cdr` is a unary operator. ***]"),(["(+ 1)","(- 1)","(* 1)","(> 1)","(< 1)","(>= 1)","(<= 1)","(= 1)","(!= 1)","(eq? 'a)","(eq? 1)","(and #t)","(or 'nil)","(not #t)","(list #t)"],[List [Symbol "+",Number 1],List [Symbol "-",Number 1],List [Symbol "*",Number 1],List [Symbol ">",Number 1],List [Symbol "<",Number 1],List [Symbol ">=",Number 1],List [Symbol "<=",Number 1],List [Symbol "=",Number 1],List [Symbol "!=",Number 1],List [Symbol "eq?",List [Symbol "quote",Symbol "a"]],List [Symbol "eq?",Number 1],List [Symbol "and",List [Symbol "quote",Symbol "t"]],List [Symbol "or",List [Symbol "quote",Symbol "nil"]],List [Symbol "not",List [Symbol "quote",Symbol "t"]],List [Symbol "list",List [Symbol "quote",Symbol "t"]]],"[1,1,1,t,t,t,t,t,t,t,t,t,nil,nil,(t )]"),(["(eq? 5 5)","(eq? 6 5 6)","(eq? (+ 3 3) 6)","(eq? 'a 5)","(eq? 'a 'b)","(eq? 'a 'a 'b)","(eq? 'a 'a 'a)"],[List [Symbol "eq?",Number 5,Number 5],List [Symbol "eq?",Number 6,Number 5,Number 6],List [Symbol "eq?",List [Symbol "+",Number 3,Number 3],Number 6],List [Symbol "eq?",List [Symbol "quote",Symbol "a"],Number 5],List [Symbol "eq?",List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "b"]],List [Symbol "eq?",List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "b"]],List [Symbol "eq?",List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "a"]]],"[t,nil,t,nil,nil,nil,t]")])
+consListCarCdr :: TestSuite
+consListCarCdr = ("Cons, List, Car, Cdr", [(["cons","list","car","cdr"],[Symbol "cons",Symbol "list",Symbol "car",Symbol "cdr"],"[*** Scheme-Exception: Symbol cons has no value. ***,*primitive*,*primitive*,*primitive*]"),(["(list (> 3 4) #t 15 'nil (< 5 2 3 5))","(car (list 'a 'b))","(cdr (list 'a 'b))","(car (list 'a 'b 'c))","(cdr (list 'a 'b 'c))","(cdr (list 'a))","(cdr 'a)"],[List [Symbol "list",List [Symbol ">",Number 3,Number 4],List [Symbol "quote",Symbol "t"],Number 15,List [Symbol "quote",Symbol "nil"],List [Symbol "<",Number 5,Number 2,Number 3,Number 5]],List [Symbol "car",List [Symbol "list",List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "b"]]],List [Symbol "cdr",List [Symbol "list",List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "b"]]],List [Symbol "car",List [Symbol "list",List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "b"],List [Symbol "quote",Symbol "c"]]],List [Symbol "cdr",List [Symbol "list",List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "b"],List [Symbol "quote",Symbol "c"]]],List [Symbol "cdr",List [Symbol "list",List [Symbol "quote",Symbol "a"]]],List [Symbol "cdr",List [Symbol "quote",Symbol "a"]]],"[(nil t 15 nil nil ),a,(b ),a,(b c ),nil,*** Scheme-Exception: Not a cons cell: a ***]"),(["(cons 2 3)"],[List [Symbol "cons",Number 2,Number 3]],"[(2 . 3)]"),(["(cons 2 (cons 3 4))","(cons 2 (cons 3 (cons 4 'nil)))"],[List [Symbol "cons",Number 2,List [Symbol "cons",Number 3,Number 4]],List [Symbol "cons",Number 2,List [Symbol "cons",Number 3,List [Symbol "cons",Number 4,List [Symbol "quote",Symbol "nil"]]]]],"[(2 3 . 4),(2 3 4 )]"),(["(car (cons 2 (cons 3 (cons 4 'nil))))","(cdr (cons 2 (cons 3 (cons 4 'nil))))","(car (list 2 3 4 'a 'b))","(cdr (list 'b 'c 3 4 (+ 3 4)))"],[List [Symbol "car",List [Symbol "cons",Number 2,List [Symbol "cons",Number 3,List [Symbol "cons",Number 4,List [Symbol "quote",Symbol "nil"]]]]],List [Symbol "cdr",List [Symbol "cons",Number 2,List [Symbol "cons",Number 3,List [Symbol "cons",Number 4,List [Symbol "quote",Symbol "nil"]]]]],List [Symbol "car",List [Symbol "list",Number 2,Number 3,Number 4,List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "b"]]],List [Symbol "cdr",List [Symbol "list",List [Symbol "quote",Symbol "b"],List [Symbol "quote",Symbol "c"],Number 3,Number 4,List [Symbol "+",Number 3,Number 4]]]],"[2,(3 4 ),2,(c 3 4 7 )]"),(["(car (cons 1 2) (cons 2 3))","(cdr (cons 2 #t) (list 4 2 4 5))"],[List [Symbol "car",List [Symbol "cons",Number 1,Number 2],List [Symbol "cons",Number 2,Number 3]],List [Symbol "cdr",List [Symbol "cons",Number 2,List [Symbol "quote",Symbol "t"]],List [Symbol "list",Number 4,Number 2,Number 4,Number 5]]],"[*** Scheme-Exception: `car` is a unary operator. ***,*** Scheme-Exception: `cdr` is a unary operator. ***]")])
+defDefineLambdaApply :: TestSuite
+defDefineLambdaApply = ("Definition, Application", [(["(def x (+ 10 20))","x","y"],[List [Symbol "def",Symbol "x",List [Symbol "+",Number 10,Number 20]],Symbol "x",Symbol "y"],"[x,30,*** Scheme-Exception: Symbol y has no value. ***]"),(["(def x 1)","(define inc (y) (+ y x))","(inc 10)","(def x 2)","(inc 10)"],[List [Symbol "def",Symbol "x",Number 1],List [Symbol "define",Symbol "inc",List [Symbol "y"],List [Symbol "+",Symbol "y",Symbol "x"]],List [Symbol "inc",Number 10],List [Symbol "def",Symbol "x",Number 2],List [Symbol "inc",Number 10]],"[x,inc,11,x,11]"),(["(lambda (x) (+ x 10))","( (lambda (x) (+ x 10)) 20)","(define mkInc (x) (lambda (y) (+ x y)))","(def i2 (mkInc 2))","(i2 10)"],[List [Symbol "lambda",List [Symbol "x"],List [Symbol "+",Symbol "x",Number 10]],List [List [Symbol "lambda",List [Symbol "x"],List [Symbol "+",Symbol "x",Number 10]],Number 20],List [Symbol "define",Symbol "mkInc",List [Symbol "x"],List [Symbol "lambda",List [Symbol "y"],List [Symbol "+",Symbol "x",Symbol "y"]]],List [Symbol "def",Symbol "i2",List [Symbol "mkInc",Number 2]],List [Symbol "i2",Number 10]],"[*closure*,30,mkInc,i2,12]"),(["(define f ((+ 3 4) x y) (+ x y))","(def (+ 3 4) 5)"],[List [Symbol "define",Symbol "f",List [List [Symbol "+",Number 3,Number 4],Symbol "x",Symbol "y"],List [Symbol "+",Symbol "x",Symbol "y"]],List [Symbol "def",List [Symbol "+",Number 3,Number 4],Number 5]],"[*** Scheme-Exception: Must use only `Symbol` for parameter names. ***,*** Scheme-Exception: Symbol def has no value. ***]"),(["(define f (x y z) (+ (- x y) z))","(f 3 4 2 8 0)"],[List [Symbol "define",Symbol "f",List [Symbol "x",Symbol "y",Symbol "z"],List [Symbol "+",List [Symbol "-",Symbol "x",Symbol "y"],Symbol "z"]],List [Symbol "f",Number 3,Number 4,Number 2,Number 8,Number 0]],"[f,1]")])
+allowsDefOverPrimForm :: TestSuite
+allowsDefOverPrimForm = ("Overriding primitive/form Names", [(["(def define 3)","define"],[List [Symbol "def",Symbol "define",Number 3],Symbol "define"],"[define,3]"),(["(define let (x y z) (+ x y z))","(let 3 4 5)","(let ((x 5) (y 100) (z 3)) (+ x (- y z)))"],[List [Symbol "define",Symbol "let",List [Symbol "x",Symbol "y",Symbol "z"],List [Symbol "+",Symbol "x",Symbol "y",Symbol "z"]],List [Symbol "let",Number 3,Number 4,Number 5],List [Symbol "let",List [List [Symbol "x",Number 5],List [Symbol "y",Number 100],List [Symbol "z",Number 3]],List [Symbol "+",Symbol "x",List [Symbol "-",Symbol "y",Symbol "z"]]]],"[let,12,102]"),(["(def + 3)","(- + 2)","(* + 10)"],[List [Symbol "def",Symbol "+",Number 3],List [Symbol "-",Symbol "+",Number 2],List [Symbol "*",Symbol "+",Number 10]],"[+,1,30]"),(["(define quote (x y) (list x y))","(quote 'a 'b)","(quote 'a)"],[List [Symbol "define",Symbol "quote",List [Symbol "x",Symbol "y"],List [Symbol "list",Symbol "x",Symbol "y"]],List [Symbol "quote",List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "b"]],List [Symbol "quote",List [Symbol "quote",Symbol "a"]]],"[quote,(a b ),(quote a )]")])
+condForm :: TestSuite
+condForm = ("`cond` form", [(["(cond ((> 4 3) 'a (> 4 2) 'b))","(cond ((< 4 3) 'a (> 4 2) 'b))","(cond ((< 4 3) 'a (< 4 2) 'b))"],[List [Symbol "cond",List [List [Symbol ">",Number 4,Number 3],List [Symbol "quote",Symbol "a"],List [Symbol ">",Number 4,Number 2],List [Symbol "quote",Symbol "b"]]],List [Symbol "cond",List [List [Symbol "<",Number 4,Number 3],List [Symbol "quote",Symbol "a"],List [Symbol ">",Number 4,Number 2],List [Symbol "quote",Symbol "b"]]],List [Symbol "cond",List [List [Symbol "<",Number 4,Number 3],List [Symbol "quote",Symbol "a"],List [Symbol "<",Number 4,Number 2],List [Symbol "quote",Symbol "b"]]]],"[a,b,nil]")])
+letForm :: TestSuite
+letForm = ("`let` form", [(["(let ((x 5) (y 10)) (+ x y))","(def x 20)","(def y 30)","(let ((x 11) (y 4)) (- (* x y) 2))","x","y"],[List [Symbol "let",List [List [Symbol "x",Number 5],List [Symbol "y",Number 10]],List [Symbol "+",Symbol "x",Symbol "y"]],List [Symbol "def",Symbol "x",Number 20],List [Symbol "def",Symbol "y",Number 30],List [Symbol "let",List [List [Symbol "x",Number 11],List [Symbol "y",Number 4]],List [Symbol "-",List [Symbol "*",Symbol "x",Symbol "y"],Number 2]],Symbol "x",Symbol "y"],"[15,x,y,42,20,30]")])
+everythingElse :: TestSuite
+everythingElse = ("Everything else", [(["435"],[Number 435],"[435]"),(["(def x 5)","x","y"],[List [Symbol "def",Symbol "x",Number 5],Symbol "x",Symbol "y"],"[x,5,*** Scheme-Exception: Symbol y has no value. ***]"),(["(f 10 30 x)"],[List [Symbol "f",Number 10,Number 30,Symbol "x"]],"[*** Scheme-Exception: Symbol f has no value. ***]"),(["+"],[Symbol "+"],"[*primitive*]"),(["()"],[List []],"[nil]"),(["'a","'5","(quote a)","'a","'asdf","'*first-val*"],[List [Symbol "quote",Symbol "a"],List [Symbol "quote",Number 5],List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "a"],List [Symbol "quote",Symbol "asdf"],List [Symbol "quote",Symbol "*first-val*"]],"[a,5,a,a,asdf,*first-val*]"),(["(define fact (n) (cond ((< n 1) 1 #t (* n (fact (- n 1))))))","(fact 5)"],[List [Symbol "define",Symbol "fact",List [Symbol "n"],List [Symbol "cond",List [List [Symbol "<",Symbol "n",Number 1],Number 1,List [Symbol "quote",Symbol "t"],List [Symbol "*",Symbol "n",List [Symbol "fact",List [Symbol "-",Symbol "n",Number 1]]]]]],List [Symbol "fact",Number 5]],"[fact,120]"),(["'a","''a","(car (quote (a b c)))","(car '(a b c))","(car ''(a b c))","'(2 3 4)","(list (+ 2 3))","'( (+ 2 3))","'(+ 2 3)"],[List [Symbol "quote",Symbol "a"],List [Symbol "quote",List [Symbol "quote",Symbol "a"]],List [Symbol "car",List [Symbol "quote",List [Symbol "a",Symbol "b",Symbol "c"]]],List [Symbol "car",List [Symbol "quote",List [Symbol "a",Symbol "b",Symbol "c"]]],List [Symbol "car",List [Symbol "quote",List [Symbol "quote",List [Symbol "a",Symbol "b",Symbol "c"]]]],List [Symbol "quote",List [Number 2,Number 3,Number 4]],List [Symbol "list",List [Symbol "+",Number 2,Number 3]],List [Symbol "quote",List [List [Symbol "+",Number 2,Number 3]]],List [Symbol "quote",List [Symbol "+",Number 2,Number 3]]],"[a,(quote a ),a,a,quote,(2 3 4 ),(5 ),((+ 2 3 ) ),(+ 2 3 )]"),(["'(+ 1 2)","(eval '(+ 1 2))","(eval ''(+ 1 2))","(eval (eval ''(+ 1 2)))","(def a '(+ x 1))","(def x 5)","(eval a)"],[List [Symbol "quote",List [Symbol "+",Number 1,Number 2]],List [Symbol "eval",List [Symbol "quote",List [Symbol "+",Number 1,Number 2]]],List [Symbol "eval",List [Symbol "quote",List [Symbol "quote",List [Symbol "+",Number 1,Number 2]]]],List [Symbol "eval",List [Symbol "eval",List [Symbol "quote",List [Symbol "quote",List [Symbol "+",Number 1,Number 2]]]]],List [Symbol "def",Symbol "a",List [Symbol "quote",List [Symbol "+",Symbol "x",Number 1]]],List [Symbol "def",Symbol "x",Number 5],List [Symbol "eval",Symbol "a"]],"[(+ 1 2 ),3,(+ 1 2 ),3,a,x,6]"),(["(def a 5)","`(+ a 1)","`(+ ,a 1)"],[List [Symbol "def",Symbol "a",Number 5],List [Symbol "quasiquote",List [Symbol "+",Symbol "a",Number 1]],List [Symbol "quasiquote",List [Symbol "+",List [Symbol "unquote",Symbol "a"],Number 1]]],"[a,(+ a 1 ),(+ 5 1 )]"),(["(defmacro if (con then else) `(cond (,con ,then #t ,else)))","(def a 5)","(if (> a 2) 10 20)","(if (< a 2) 10 20)","(define fact (n) (if (< n 1) 1 (* n (fact (- n 1)))))","(fact 10)","(defmacro mkplus (e) (if (eq? (car e) '-) (cons '+ (cdr e)) e))","(mkplus (- 5 4))"],[List [Symbol "defmacro",Symbol "if",List [Symbol "con",Symbol "then",Symbol "else"],List [Symbol "quasiquote",List [Symbol "cond",List [List [Symbol "unquote",Symbol "con"],List [Symbol "unquote",Symbol "then"],List [Symbol "quote",Symbol "t"],List [Symbol "unquote",Symbol "else"]]]]],List [Symbol "def",Symbol "a",Number 5],List [Symbol "if",List [Symbol ">",Symbol "a",Number 2],Number 10,Number 20],List [Symbol "if",List [Symbol "<",Symbol "a",Number 2],Number 10,Number 20],List [Symbol "define",Symbol "fact",List [Symbol "n"],List [Symbol "if",List [Symbol "<",Symbol "n",Number 1],Number 1,List [Symbol "*",Symbol "n",List [Symbol "fact",List [Symbol "-",Symbol "n",Number 1]]]]],List [Symbol "fact",Number 10],List [Symbol "defmacro",Symbol "mkplus",List [Symbol "e"],List [Symbol "if",List [Symbol "eq?",List [Symbol "car",Symbol "e"],List [Symbol "quote",Symbol "-"]],List [Symbol "cons",List [Symbol "quote",Symbol "+"],List [Symbol "cdr",Symbol "e"]],Symbol "e"]],List [Symbol "mkplus",List [Symbol "-",Number 5,Number 4]]],"[if,a,10,20,fact,3628800,mkplus,9]")])
+nestedQuasiQuotes :: TestSuite
+nestedQuasiQuotes = ("Nested Quasiquoting", [(["(def a 5)","``(+ ,,a 1)","``(+ ,,a ,a)","`(+ a ,,a)","``(+ a ,,a)","(eval ``(+ ,,a 1))","(eval (eval ``(+ ,,a 1)))"],[List [Symbol "def",Symbol "a",Number 5],List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "+",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]],Number 1]]],List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "+",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]],List [Symbol "unquote",Symbol "a"]]]],List [Symbol "quasiquote",List [Symbol "+",Symbol "a",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]]]],List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "+",Symbol "a",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]]]]],List [Symbol "eval",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "+",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]],Number 1]]]],List [Symbol "eval",List [Symbol "eval",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "+",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]],Number 1]]]]]],"[a,(quasiquote (+ (unquote 5 ) 1 ) ),(quasiquote (+ (unquote 5 ) (unquote a ) ) ),(+ a *** Scheme-Exception: Cannot `unquote` more than `quasiquote`. *** ),(quasiquote (+ a (unquote 5 ) ) ),(+ 5 1 ),6]"),(["(def a 5)","```(+ ,,,a ,,a)","```(+ ,a ,,a)","```(+ `a `(+ ,,,,a a))"],[List [Symbol "def",Symbol "a",Number 5],List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "+",List [Symbol "unquote",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]]],List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]]]]]],List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "+",List [Symbol "unquote",Symbol "a"],List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]]]]]],List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "+",List [Symbol "quasiquote",Symbol "a"],List [Symbol "quasiquote",List [Symbol "+",List [Symbol "unquote",List [Symbol "unquote",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]]]],Symbol "a"]]]]]]],"[a,(quasiquote (quasiquote (+ (unquote (unquote 5 ) ) (unquote (unquote a ) ) ) ) ),(quasiquote (quasiquote (+ (unquote a ) (unquote (unquote a ) ) ) ) ),(quasiquote (quasiquote (+ (quasiquote a ) (quasiquote (+ (unquote (unquote (unquote 5 ) ) ) a ) ) ) ) )]"),(["(def a 5)","```a","```,a","```,,a","```,,,a","(eval ```,,,a)","(eval (eval ```,,,a))"],[List [Symbol "def",Symbol "a",Number 5],List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "quasiquote",Symbol "a"]]],List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "unquote",Symbol "a"]]]],List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]]]]],List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "unquote",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]]]]]],List [Symbol "eval",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "unquote",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]]]]]]],List [Symbol "eval",List [Symbol "eval",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "quasiquote",List [Symbol "unquote",List [Symbol "unquote",List [Symbol "unquote",Symbol "a"]]]]]]]]],"[a,(quasiquote (quasiquote a ) ),(quasiquote (quasiquote (unquote a ) ) ),(quasiquote (quasiquote (unquote (unquote a ) ) ) ),(quasiquote (quasiquote (unquote (unquote 5 ) ) ) ),(quasiquote (unquote 5 ) ),5]")])

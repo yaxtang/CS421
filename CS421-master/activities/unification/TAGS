@@ -1,0 +1,45 @@
+
+./app/foo.hs,107
+e1 e11,2
+e2 e22,3
+e3 e34,5
+e4 e45,6
+e5 e56,7
+e6 e67,8
+e7 e78,9
+p2a p2a10,11
+p2b p2b11,12
+
+./app/Main.hs,428
+module Main Main0,1
+data Entity Entity8,9
+data Entity = Var Var8,9
+            | Object Object9,10
+instance instance12,13
+isVar isVar17,18
+type Env Env22,23
+initial initial24,25
+initial initial25,26
+add add27,28
+add add28,29
+contains contains30,31
+contains contains31,32
+phi phi35,36
+phi phi36,37
+liftit liftit39,40
+occurs occurs41,42
+occurs occurs42,43
+unify unify44,45
+unify unify45,46
+
+./Setup.hs,15
+main main1,2
+
+./test/Spec.hs,30
+main main0,1
+main main1,2
+
+./src/Lib.hs,65
+module LibLib0,1
+someFunc someFunc4,5
+someFunc someFunc5,6
