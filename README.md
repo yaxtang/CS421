@@ -15,7 +15,7 @@ Link: https://learnyouahaskell.com/chapters
 - Create an REPL for your interpreter which handles manipulating the environment based on inputs from the user
 - Understand homoiconicity and metacircular evaluation via Scheme
 
-  ## Practice
-  -  build an interpreter for a minimalist dialect of Lisp called Scheme.
-  -  Implement a stack-based language. Such languages are often useful for embedded systems. (Postscript, the printer language, is an example.) The language we will implement is called Forth.
-  -  Write an interpreter for a language with both expressions and statements.
+## Practice
+-  build an interpreter for a minimalist dialect of Lisp called Scheme.
+-  Implement a stack-based language. Such languages are often useful for embedded systems. (Postscript, the printer language, is an example.) The language we will implement is called Forth.
+-  Write an interpreter for a language with both expressions and statements.
